@@ -1,0 +1,10 @@
+{
+  "id": "vault-launcher",
+  "name": "Vault Launcher",
+  "version": "1.5.0",
+  "minAppVersion": "1.9.0",
+  "description": "A flat Notes list in the sidebar (Inbox/Starred/All tabs, sorted by modified date), configurable shortcuts that open any file (e.g. Bases) from commands and ribbon icons, and header buttons on each note to toggle Organize, Archive and Star flags.",
+  "author": "Tom Robertson",
+  "authorUrl": "https://github.com/tommertron",
+  "isDesktopOnly": false
+}
