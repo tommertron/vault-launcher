@@ -5,6 +5,8 @@ An Obsidian plugin for an inbox-style workflow built on frontmatter flags and Ba
 - **Notes list** in the sidebar: every note regardless of folder, sorted by modified date, with **Inbox**, **Starred** and **All** tabs and a filter box.
 - **Shortcuts**: open any file in your vault (usually a `.base`) from the command palette (`Open <name>`) and, optionally, a ribbon icon.
 - **Flag buttons** in each note's header, plus commands, to toggle `_organized`, `_archived` and `_starred` in frontmatter.
+- **Note menu**: right-click a note in the list (press and hold on phone/iPad) to organize, archive, star, open in a new tab or delete it. The flag items also appear in the file explorer and tab menus.
+- **Swipe actions** on phone/iPad: swipe a note right to star it, left to archive it (both changeable in settings). Swipe again to undo.
 
 ## How the flags work
 
@@ -20,7 +22,7 @@ Notes with `type: Type` are also left out of the Inbox.
 
 - **Note header buttons**: choose which of Organize, Archive and Star appear on notes.
 - **Shortcuts**: one row per file, with a name, a path relative to the vault root (e.g. `Bases/Inbox.base`), a [Lucide](https://lucide.dev/icons/) icon name, and a ribbon toggle. Command and ribbon changes apply when you close settings.
-- **Notes list**: ribbon icon, plus folders and note names to hide from the Inbox and All tabs.
+- **Notes list**: ribbon icon, folders and note names to hide from the Inbox and All tabs, and what swiping right and left does.
 - **Turning a flag off**: set the field to `false`, or remove it.
 
 ## Install

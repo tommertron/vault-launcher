@@ -46,9 +46,52 @@
   padding: 0 4px 8px;
 }
 .vln-item {
-  padding: 6px 8px;
+  position: relative;
+  overflow: hidden;
   border-radius: var(--radius-s);
   cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.vln-body {
+  position: relative;
+  z-index: 1;
+  padding: 6px 8px;
+}
+.vln-item.is-swiping .vln-body {
+  background-color: var(--background-secondary);
+}
+
+/* Swipe actions: a strip behind the note that turns solid once letting go would act. */
+.vln-swipe-bg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  background-color: var(--background-modifier-hover);
+}
+.vln-swipe-bg.is-left {
+  justify-content: flex-end;
+}
+.vln-swipe-bg.is-armed {
+  color: var(--text-on-accent);
+  background-color: var(--interactive-accent);
+}
+.vln-swipe-bg.is-armed[data-flag="star"] {
+  background-color: var(--color-yellow);
+}
+.vln-swipe-bg.is-armed[data-flag="archive"] {
+  background-color: var(--color-orange);
+}
+.vln-swipe-bg.is-armed[data-flag="organize"] {
+  background-color: var(--color-green);
+}
+.vln-swipe-icon {
+  display: flex;
 }
 .vln-item:hover {
   background-color: var(--background-modifier-hover);

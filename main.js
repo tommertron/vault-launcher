@@ -1,22 +1,26 @@
 const {
   Plugin, PluginSettingTab, Setting, Notice, TFile, MarkdownView,
-  ItemView, Platform, Keymap, debounce, moment, setIcon,
+  ItemView, Platform, Keymap, Menu, Modal, debounce, moment, setIcon,
 } = require("obsidian");
 
 
 // Frontmatter flags toggled from each note's header (and by command).
 // view.addAction prepends, so the header shows these right-to-left.
 const FLAGS = [
-  { key: "_starred", id: "star", icon: "star", on: "Starred", off: "Unstarred", verb: "Star" },
-  { key: "_archived", id: "archive", icon: "archive", on: "Archived", off: "Unarchived", verb: "Archive" },
-  { key: "_organized", id: "organize", icon: "check", on: "Organized", off: "Not organized", verb: "Organize" },
+  { key: "_starred", id: "star", icon: "star", on: "Starred", off: "Unstarred", verb: "Star", undo: "Unstar" },
+  { key: "_archived", id: "archive", icon: "archive", on: "Archived", off: "Unarchived", verb: "Archive", undo: "Unarchive" },
+  { key: "_organized", id: "organize", icon: "check", on: "Organized", off: "Not organized", verb: "Organize", undo: "Unorganize" },
 ];
+const flagById = (id) => FLAGS.find((f) => f.id === id);
 
 const ACTION_CLASS = "vault-launcher-action";
 
 // The flat "Notes list" view: every note regardless of folder, by modified date.
 const VIEW_TYPE = "vault-launcher-notes";
 const LIST_RIBBON = "Notes list";
+// How far (px) a note must be swiped before letting go acts on it, and how long a hold opens the menu.
+const SWIPE_COMMIT = 80;
+const LONG_PRESS_MS = 500;
 const LISTS = [
   { id: "inbox", label: "Inbox" },
   { id: "starred", label: "Starred" },
@@ -37,6 +41,8 @@ const DEFAULT_SETTINGS = {
   hiddenNames: [],
   offMode: "false", // "false" = write false; "remove" = delete the field
   list: { view: "inbox", sort: "desc", showArchived: false },
+  // Flag toggled by swiping a note in the notes list (touch only): a FLAGS id or "none".
+  swipe: { right: "star", left: "archive" },
 };
 
 const commandId = (label) => `open-${label.trim().toLowerCase().replace(/\s+/g, "-")}`;
@@ -52,6 +58,7 @@ class VaultLauncher extends Plugin {
       hiddenNames: saved.hiddenNames || [...DEFAULT_SETTINGS.hiddenNames],
       offMode: saved.offMode || DEFAULT_SETTINGS.offMode,
       list: { ...DEFAULT_SETTINGS.list, ...saved.list },
+      swipe: { ...DEFAULT_SETTINGS.swipe, ...saved.swipe },
     };
     this.addSettingTab(new VaultLauncherSettings(this.app, this));
 
@@ -81,6 +88,19 @@ class VaultLauncher extends Plugin {
         },
       });
     }
+
+    // Flag items in every note's menu: file explorer, tab header, "more options" and the notes list.
+    this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
+      if (!(file instanceof TFile) || file.extension !== "md") return;
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+      for (const flag of [...FLAGS].reverse()) {
+        const on = fm[flag.key] === true;
+        menu.addItem((item) =>
+          item.setTitle(on ? flag.undo : flag.verb).setIcon(flag.icon).setSection("action")
+            .onClick(() => this.toggle(file, flag))
+        );
+      }
+    }));
 
     const refreshAll = () => this.refreshAll();
     this.app.workspace.onLayoutReady(refreshAll);
@@ -180,7 +200,35 @@ class VaultLauncher extends Plugin {
     });
     new Notice(`${file.basename}: ${on ? flag.on : flag.off}`);
   }
+
+  confirmDelete(file) {
+    new ConfirmDeleteModal(this.app, file).open();
+  }
 };
+
+class ConfirmDeleteModal extends Modal {
+  constructor(app, file) {
+    super(app);
+    this.file = file;
+  }
+
+  onOpen() {
+    this.titleEl.setText("Delete note?");
+    this.contentEl.createEl("p", { text: `"${this.file.basename}" will be moved to the trash.` });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) => b.setButtonText("Delete").setWarning().onClick(async () => {
+        this.close();
+        // Follows Obsidian's "Deleted files" setting (system trash or .trash).
+        await this.app.fileManager.trashFile(this.file);
+        new Notice(`${this.file.basename}: Deleted`);
+      }));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
 
 class NotesListView extends ItemView {
   constructor(leaf, plugin) {
@@ -267,15 +315,17 @@ class NotesListView extends ItemView {
       const item = frag.createDiv("vln-item");
       item.dataset.path = file.path;
       if (file.path === active) item.addClass("is-active");
-      const title = item.createDiv("vln-title");
+      const body = item.createDiv("vln-body");
+      const title = body.createDiv("vln-title");
       title.createSpan({ text: file.basename });
       if (view !== "starred" && this.app.metadataCache.getFileCache(file)?.frontmatter?._starred === true) {
         setIcon(title.createSpan("vln-star"), "star");
       }
-      const meta = item.createDiv("vln-meta");
+      const meta = body.createDiv("vln-meta");
       meta.createSpan({ cls: "vln-date", text: this.formatDate(file.stat.mtime) });
       if (file.parent && !file.parent.isRoot()) meta.createSpan({ cls: "vln-folder", text: file.parent.path });
       item.onclick = (evt) => this.openNote(file, evt);
+      this.addGestures(item, body, file);
     }
     this.listEl.empty();
     if (!notes.length) this.listEl.createDiv({ cls: "vln-empty", text: this.query ? "No matches" : "Nothing here" });
@@ -292,6 +342,88 @@ class NotesListView extends ItemView {
   markActive() {
     const active = this.app.workspace.getActiveFile()?.path;
     for (const item of this.listEl.children) item.toggleClass("is-active", item.dataset.path === active);
+  }
+
+  // Right-click (or press and hold on touch) for a menu; swipe left/right to toggle a flag.
+  addGestures(item, body, file) {
+    item.addEventListener("contextmenu", (evt) => {
+      evt.preventDefault();
+      // Touch devices get the menu from the long-press below; Android also fires contextmenu.
+      if (!Platform.isMobile) this.showMenu(file, evt);
+    });
+    if (!Platform.isMobile) return;
+
+    let x0, y0, dx, mode, timer, bg, flag;
+    const reset = () => {
+      clearTimeout(timer);
+      item.removeClass("is-swiping");
+      body.style.transform = "";
+      bg?.remove();
+      bg = null;
+      mode = null;
+    };
+    item.addEventListener("touchstart", (evt) => {
+      if (evt.touches.length !== 1) return reset();
+      x0 = evt.touches[0].clientX;
+      y0 = evt.touches[0].clientY;
+      dx = 0;
+      mode = "pending";
+      timer = setTimeout(() => {
+        mode = "menu";
+        this.showMenu(file, { x: x0, y: y0 });
+      }, LONG_PRESS_MS);
+    }, { passive: true });
+
+    item.addEventListener("touchmove", (evt) => {
+      if (mode !== "pending" && mode !== "swipe") return;
+      const mx = evt.touches[0].clientX - x0;
+      const my = evt.touches[0].clientY - y0;
+      if (mode === "pending") {
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        clearTimeout(timer);
+        mode = Math.abs(mx) > Math.abs(my) ? "swipe" : "scroll";
+        if (mode === "scroll") return;
+      }
+      // Keep the sidebar drawer from treating this as its own swipe.
+      evt.preventDefault();
+      evt.stopPropagation();
+      const side = mx > 0 ? "right" : "left";
+      flag = flagById(this.plugin.settings.swipe[side]);
+      if (!flag) return;
+      if (!bg || bg.dataset.side !== side) {
+        bg?.remove();
+        bg = item.createDiv(`vln-swipe-bg is-${side}`);
+        bg.dataset.side = side;
+        bg.dataset.flag = flag.id;
+        const on = this.app.metadataCache.getFileCache(file)?.frontmatter?.[flag.key] === true;
+        setIcon(bg.createSpan("vln-swipe-icon"), flag.icon);
+        bg.createSpan({ text: on ? flag.undo : flag.verb });
+        item.addClass("is-swiping");
+      }
+      dx = mx;
+      body.style.transform = `translateX(${dx}px)`;
+      bg.toggleClass("is-armed", Math.abs(dx) >= SWIPE_COMMIT);
+    }, { passive: false });
+
+    item.addEventListener("touchend", (evt) => {
+      // A hold or a swipe shouldn't also open the note.
+      if (mode === "menu" || mode === "swipe") evt.preventDefault();
+      if (mode === "swipe" && flag && bg && Math.abs(dx) >= SWIPE_COMMIT) this.plugin.toggle(file, flag);
+      reset();
+    });
+    item.addEventListener("touchcancel", reset);
+  }
+
+  showMenu(file, at) {
+    const menu = new Menu();
+    menu.addItem((i) => i.setTitle("Open in new tab").setIcon("file-plus").setSection("open")
+      .onClick(() => this.app.workspace.getLeaf("tab").openFile(file)));
+    // Our flag items (and other plugins' items) come from the file-menu event.
+    this.app.workspace.trigger("file-menu", menu, file, "vault-launcher-notes", this.leaf);
+    menu.addItem((i) => i.setTitle("Delete").setIcon("trash-2").setWarning(true).setSection("danger")
+      .onClick(() => this.plugin.confirmDelete(file)));
+    if (at instanceof MouseEvent) menu.showAtMouseEvent(at);
+    else menu.showAtPosition(at);
   }
 
   async openNote(file, evt) {
@@ -403,6 +535,23 @@ class VaultLauncherSettings extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
+
+    const swipeOptions = (d) => {
+      d.addOption("none", "Nothing");
+      for (const flag of [...FLAGS].reverse()) d.addOption(flag.id, `${flag.verb} / ${flag.undo}`);
+      return d;
+    };
+    for (const [side, label] of [["right", "Swipe right"], ["left", "Swipe left"]]) {
+      new Setting(containerEl)
+        .setName(label)
+        .setDesc("On phone and tablet, what swiping a note in the list does. Press and hold a note for the full menu.")
+        .addDropdown((d) =>
+          swipeOptions(d).setValue(settings.swipe[side]).onChange(async (v) => {
+            settings.swipe[side] = v;
+            await this.plugin.saveSettings();
+          })
+        );
+    }
 
     new Setting(containerEl).setName("Behaviour").setHeading();
     new Setting(containerEl)
